@@ -125,9 +125,9 @@ def generate(kind, data, key):
                 "json_schema": {"name": kind, "schema": SCHEMAS[kind]},
             },
         }
-        config_path = STATE / "azure.json"
-        if config_path.is_file():
-            raw = cloud.chat(STATE, json.loads(config_path.read_text()), messages, kind, SCHEMAS[kind])
+        config = load_config()
+        if config is not None:
+            raw = cloud.chat(STATE, config, messages, kind, SCHEMAS[kind])
         else:
             req = request.Request(
                 MODEL + "/v1/chat/completions",
@@ -303,9 +303,37 @@ def audio_to_text(raw, mime):
         return {"text": line}
 
 
-def provider_info():
+class ConfigError(RuntimeError):
+    """The optional .state/azure.json exists but cannot be used."""
+
+
+def load_config():
+    """Return the Azure config, or None when no config file exists.
+
+    The README has users write this file by hand, so a typo must surface
+    as a clear server error, not as a dropped connection or a raw parser
+    message returned to the browser as if the request were at fault.
+    """
     config_path = STATE / "azure.json"
-    config = json.loads(config_path.read_text()) if config_path.is_file() else {}
+    if not config_path.is_file():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ConfigError(
+            "The Azure configuration in .state/azure.json is invalid. "
+            "Fix the file and try again."
+        ) from exc
+    if not isinstance(config, dict):
+        raise ConfigError(
+            "The Azure configuration in .state/azure.json is invalid. "
+            "Fix the file and try again."
+        )
+    return config
+
+
+def provider_info():
+    config = load_config() or {}
     eleven = (STATE / "elevenlabs.key").is_file()
     tutor_name = config.get("chat_model", "Qwen on this Mac")
     other_voice = config.get("voice_model", "macOS")
@@ -315,12 +343,11 @@ def provider_info():
 
 
 def speak(line, voice, model):
-    config_path = STATE / "azure.json"
+    config = load_config()
     if model in {"eleven_v4", "eleven_v4_turbo"}:
-        config = json.loads(config_path.read_text()) if config_path.is_file() else {}
-        return cloud.eleven_speech(STATE, config, line, voice, model)
-    if config_path.exists():
-        return cloud.speech(STATE, json.loads(config_path.read_text()), line, voice)
+        return cloud.eleven_speech(STATE, config or {}, line, voice, model)
+    if config is not None:
+        return cloud.speech(STATE, config, line, voice)
     if re.search(r"[ãõç]|\b(?:você|uma|como|quero|preciso|minha|por favor|obrigado|obrigada)\b", line, re.I):
         voice = "Luciana"
     with tempfile.TemporaryDirectory(dir=RUNTIME) as tmp:
@@ -365,7 +392,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/provider" and self.headers.get("Host") == ORIGIN.split("//")[1]:
-            return self.send(200, "application/json", json.dumps(provider_info()).encode())
+            try:
+                info = provider_info()
+            except ConfigError as exc:
+                return self.send(503, "application/json", json.dumps({"error": str(exc)}).encode())
+            return self.send(200, "application/json", json.dumps(info).encode())
         files = {
             "/": ("index.html", "text/html; charset=utf-8"),
             "/icons.svg": ("icons.svg", "image/svg+xml"),
@@ -444,6 +475,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, "application/json", json.dumps(result).encode())
         except (BrokenPipeError, ConnectionResetError):
             return
+        except ConfigError as exc:
+            self.send(503, "application/json", json.dumps({"error": str(exc)}).encode())
         except cloud.DailyLimit as exc:
             self.send(429, "application/json", json.dumps({"error": str(exc)}).encode())
         except (ValueError, TypeError, AttributeError) as exc:
