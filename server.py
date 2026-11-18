@@ -14,7 +14,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib import error, request
+from urllib import error, parse, request
 
 ROOT = Path(__file__).resolve().parent
 STATE = ROOT / ".state"
@@ -364,7 +364,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        if self.path == "/api/provider" and self.headers.get("Host") == ORIGIN.split("//")[1]:
+        path = parse.urlsplit(self.path).path
+        if path == "/api/provider" and self.headers.get("Host") == ORIGIN.split("//")[1]:
             return self.send(200, "application/json", json.dumps(provider_info()).encode())
         files = {
             "/": ("index.html", "text/html; charset=utf-8"),
@@ -381,8 +382,8 @@ class Handler(BaseHTTPRequestHandler):
         }
         route = (
             "/app"
-            if re.fullmatch(r"/app/books/[a-f0-9-]{36}", self.path)
-            else self.path
+            if re.fullmatch(r"/app/books/[a-f0-9-]{36}", path)
+            else path
         )
         if self.headers.get("Host") != ORIGIN.split("//")[1] or route not in files:
             return self.send(404, "text/plain", b"Not found")
@@ -395,8 +396,9 @@ class Handler(BaseHTTPRequestHandler):
             or self.headers.get("Origin") != ORIGIN
         ):
             return self.send(403, "text/plain", b"Local browser required")
-        kind = self.path.removeprefix("/api/")
-        if self.path != "/api/" + kind or kind not in {
+        path = parse.urlsplit(self.path).path
+        kind = path.removeprefix("/api/")
+        if path != "/api/" + kind or kind not in {
             "craft",
             "chat",
             "book",

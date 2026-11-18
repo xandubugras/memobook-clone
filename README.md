@@ -33,6 +33,8 @@ Para provisionar Azure com Terraform, escolha sua assinatura com a Azure CLI, in
 
 ## Testar
 
+As rotas do servidor têm um teste próprio que não precisa do Studio, dos modelos nem do navegador: `python3 server.test.py` (ou `npm run test:server`).
+
 Com o Studio rodando, instale as dependências de desenvolvimento e rode os testes em um Mac com Google Chrome instalado.
 
 ```sh
